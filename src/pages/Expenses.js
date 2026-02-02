@@ -19,6 +19,7 @@ export default function Expenses() {
 
   useEffect(() => {
     fetchExpenses();
+    // eslint-disable-next-line
   }, [filter]);
 
   const fetchExpenses = async () => {
@@ -34,7 +35,8 @@ export default function Expenses() {
 
       const res = await axios.get(url);
       setExpenses(res.data);
-    } catch {
+    } catch (err) {
+      console.error(err);
       toast.error("Failed to load expenses");
     } finally {
       setLoading(false);
@@ -47,7 +49,7 @@ export default function Expenses() {
     fetchExpenses();
   };
 
-  const total = expenses.reduce((s, e) => s + e.amount, 0);
+  const total = expenses.reduce((sum, e) => sum + e.amount, 0);
 
   if (loading) return <h2>Loading...</h2>;
 
@@ -55,6 +57,7 @@ export default function Expenses() {
     <div>
       <h2>Expenses</h2>
 
+      {/* FILTER BAR */}
       <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
         <Filter size={18} />
 
@@ -98,7 +101,7 @@ export default function Expenses() {
         </button>
       </div>
 
-      <h3>Total: ₹{total}</h3>
+      <h3>Total: ₹{total.toFixed(2)}</h3>
 
       {expenses.length === 0 ? (
         <p>No expenses</p>
@@ -112,8 +115,16 @@ export default function Expenses() {
                 <td>{e.category}</td>
                 <td>{e.date}</td>
                 <td>
-                  <Edit onClick={() => navigate("/add-expense", { state: { e } })} />
-                  <Trash2 onClick={() => deleteExpense(e.id)} />
+                  <Edit
+                    size={16}
+                    onClick={() =>
+                      navigate("/add-expense", { state: { expense: e } })
+                    }
+                  />
+                  <Trash2
+                    size={16}
+                    onClick={() => deleteExpense(e.id)}
+                  />
                 </td>
               </tr>
             ))}
