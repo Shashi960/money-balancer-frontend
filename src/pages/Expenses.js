@@ -54,8 +54,9 @@ export default function Expenses() {
   if (loading) return <h2>Loading...</h2>;
 
   return (
-    <div>
-      <h2>Expenses</h2>
+    <div className="page-container">
+        <h2 className="page-title">Expenses</h2>
+
 
       {/* FILTER BAR */}
       <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
@@ -94,9 +95,10 @@ export default function Expenses() {
         />
 
         <button
+          className="btn btn-primary"
           disabled={!fromDate || !toDate}
-          onClick={fetchExpenses}
         >
+
           Apply
         </button>
       </div>
@@ -106,7 +108,8 @@ export default function Expenses() {
       {expenses.length === 0 ? (
         <p>No expenses</p>
       ) : (
-        <table>
+         <table className="data-table">
+
           <tbody>
             {expenses.map((e) => (
               <tr key={e.id}>
@@ -115,13 +118,13 @@ export default function Expenses() {
                 <td>{e.category}</td>
                 <td>{e.date}</td>
                 <td>
-                  <Edit
+                  <Edit className="icon-btn"
                     size={16}
                     onClick={() =>
                       navigate("/add-expense", { state: { expense: e } })
                     }
                   />
-                  <Trash2
+                  <Trash2 className="icon-btn danger"
                     size={16}
                     onClick={() => deleteExpense(e.id)}
                   />
