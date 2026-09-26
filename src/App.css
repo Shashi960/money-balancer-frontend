@@ -276,10 +276,25 @@ body {
 }
 
 /* ---------------- Quick Chips & Pills ---------------- */
-.chip-row {
+.chip-row,
+.preset-chips {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
+}
+
+.filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+}
+
+.stat-value {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 1.75rem;
+  font-weight: 700;
 }
 
 .chip-btn {
@@ -594,6 +609,30 @@ body {
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
+  }
+
+  .mobile-expense-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.85rem 1rem;
+    border-radius: 12px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+  }
+
+  .mobile-header-brand {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .mobile-header-title {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: #1e293b;
   }
 }
 

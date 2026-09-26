@@ -76,7 +76,7 @@ export function evaluateMathExpression(rawInput) {
   if (rawInput === null || rawInput === undefined) {
     return null;
   }
-  const str = String(rawInput).trim();
+  const str = String(rawInput).replace(/\s+/g, "");
   if (!str) return null;
 
   // Plain number check
@@ -84,22 +84,51 @@ export function evaluateMathExpression(rawInput) {
     return parseFloat(str);
   }
 
-  // Only allow digits, decimal points, +, -, *, /, (, ), and spaces
-  if (!/^[\d+\-*/().\s]+$/.test(str)) {
+  // Only allow digits, decimal points, +, -, *, /
+  if (!/^[\d+\-*/.]+$/.test(str)) {
     return null;
   }
 
-  // Check if it actually contains an operator
-  if (!/[+\-*/]/.test(str)) {
+  if (!/[+\-*/]/.test(str) || /[+\-*/.]$/.test(str)) {
     return null;
   }
 
   try {
-    // Safe evaluation using Function after strict character whitelist
-    // eslint-disable-next-line no-new-func
-    const result = Function(`"use strict"; return (${str})`)();
-    if (typeof result === "number" && Number.isFinite(result) && result >= 0) {
-      return Math.round(result * 100) / 100;
+    // Tokenize numbers and operators (+, -, *, /)
+    const tokens = str.match(/(\d+(?:\.\d+)?|[+\-*/])/g);
+    if (!tokens || tokens.join("") !== str) return null;
+
+    // First pass: handle * and /
+    const addSubStack = [];
+    let i = 0;
+    while (i < tokens.length) {
+      const token = tokens[i];
+      if (token === "*" || token === "/") {
+        const prev = Number(addSubStack.pop());
+        const next = Number(tokens[i + 1]);
+        if (isNaN(prev) || isNaN(next) || (token === "/" && next === 0)) return null;
+        addSubStack.push(token === "*" ? prev * next : prev / next);
+        i += 2;
+      } else {
+        addSubStack.push(token);
+        i += 1;
+      }
+    }
+
+    // Second pass: handle + and -
+    let total = Number(addSubStack[0]);
+    if (isNaN(total)) return null;
+    for (let j = 1; j < addSubStack.length; j += 2) {
+      const op = addSubStack[j];
+      const val = Number(addSubStack[j + 1]);
+      if (isNaN(val)) return null;
+      if (op === "+") total += val;
+      else if (op === "-") total -= val;
+      else return null;
+    }
+
+    if (Number.isFinite(total) && total >= 0) {
+      return Math.round(total * 100) / 100;
     }
   } catch {
     return null;

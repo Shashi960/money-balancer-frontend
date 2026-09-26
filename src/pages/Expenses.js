@@ -68,7 +68,6 @@ export default function Expenses() {
     if (period !== "custom") {
       fetchExpenses();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [period, selectedMonth]);
 
   const fetchExpenses = async () => {
