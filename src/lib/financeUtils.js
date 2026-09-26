@@ -284,3 +284,271 @@ export function exportExpensesToCSV(expenses, filename = "expenses.csv") {
   link.click();
   document.body.removeChild(link);
 }
+
+// ---------- Indian Bank / UPI SMS Debit Parser ----------
+const CATEGORY_KEYWORDS = {
+  Food: [
+    "swiggy",
+    "zomato",
+    "food",
+    "restaurant",
+    "cafe",
+    "coffee",
+    "tea",
+    "bakery",
+    "hotel",
+    "domino",
+    "kfc",
+    "mcdonald",
+    "blinkit",
+    "zepto",
+    "bigbasket",
+    "eatsure",
+    "tiffin",
+    "mess",
+    "canteen",
+    "milk",
+  ],
+  Travel: [
+    "rapido",
+    "uber",
+    "ola",
+    "irctc",
+    "redbus",
+    "bus",
+    "metro",
+    "bmtc",
+    "petrol",
+    "fuel",
+    "hpcl",
+    "bpcl",
+    "iocl",
+    "shell",
+    "fastag",
+    "toll",
+    "auto",
+    "cab",
+    "train",
+    "flight",
+  ],
+  Shopping: [
+    "amazon",
+    "flipkart",
+    "myntra",
+    "ajio",
+    "meesho",
+    "dmart",
+    "reliance",
+    "zudio",
+    "decathlon",
+    "mall",
+    "store",
+    "mart",
+    "supermarket",
+    "grocer",
+  ],
+  Bills: [
+    "jio",
+    "airtel",
+    "vodafone",
+    "bsnl",
+    "bescom",
+    "electricity",
+    "water",
+    "gas",
+    "broadband",
+    "wifi",
+    "recharge",
+    "billdesk",
+    "act fibernet",
+    "tataplay",
+    "bill",
+  ],
+  Entertainment: [
+    "netflix",
+    "spotify",
+    "hotstar",
+    "prime",
+    "bookmyshow",
+    "pvr",
+    "inox",
+    "youtube",
+    "movie",
+    "game",
+  ],
+  Healthcare: [
+    "apollo",
+    "medplus",
+    "pharmacy",
+    "hospital",
+    "clinic",
+    "doctor",
+    "1mg",
+    "pharmeasy",
+    "medical",
+    "health",
+    "lab",
+    "medicine",
+  ],
+  Education: [
+    "udemy",
+    "coursera",
+    "college",
+    "school",
+    "fees",
+    "book",
+    "course",
+    "tuition",
+    "exam",
+  ],
+};
+
+export function parseSingleBankSms(rawText) {
+  if (!rawText || !String(rawText).trim()) return null;
+  const text = String(rawText).trim();
+  const lower = text.toLowerCase();
+
+  // Ignore pure OTP messages
+  if (
+    (lower.includes("otp") || lower.includes("verification code")) &&
+    !["debited", "spent", "paid", "deducted", "sent"].some((w) => lower.includes(w))
+  ) {
+    return null;
+  }
+
+  // Extract amount: Rs. 450.00, INR 1,250.50, ₹85, debited by 210.00
+  const amountPatterns = [
+    /(?:rs\.?|inr|₹|amt)\s*[:\-]?\s*([0-9,]+(?:\.[0-9]{1,2})?)/i,
+    /debited\s+(?:by|with|for)?\s*(?:rs\.?|inr|₹)?\s*([0-9,]+(?:\.[0-9]{1,2})?)/i,
+    /spent\s+(?:rs\.?|inr|₹)?\s*([0-9,]+(?:\.[0-9]{1,2})?)/i,
+    /paid\s+(?:rs\.?|inr|₹)?\s*([0-9,]+(?:\.[0-9]{1,2})?)/i,
+    /sent\s+(?:rs\.?|inr|₹)?\s*([0-9,]+(?:\.[0-9]{1,2})?)/i,
+  ];
+
+  let amount = null;
+  for (const pat of amountPatterns) {
+    const m = text.match(pat);
+    if (m && m[1]) {
+      const val = parseFloat(m[1].replace(/,/g, ""));
+      if (!isNaN(val) && val > 0) {
+        amount = Math.round(val * 100) / 100;
+        break;
+      }
+    }
+  }
+
+  if (!amount) return null;
+
+  // Extract payee / merchant
+  let payee = null;
+  const payeePatterns = [
+    /(?:to\s+vpa|paid\s+to|sent\s+to|trf\s+to|towards|to|at)\s+([A-Za-z0-9_.\-@ &]{2,35}?)(?:\s+on\b|\s+ref\b|\s+upi\b|\s+via\b|\s+avl\b|\s+bal\b|\.|,|$)/i,
+    /upi[\/\-][0-9]+[\/\-]([A-Za-z0-9_.\- ]{2,30}?)(?:[\/\-]|\.|\s|$)/i,
+    /info\s*:\s*([A-Za-z0-9_.\-\/ ]{3,35}?)(?:\.|,|$)/i,
+  ];
+
+  for (const pat of payeePatterns) {
+    const m = text.match(pat);
+    if (m && m[1]) {
+      let candidate = m[1].replace(/^[ .,\-:/]+|[ .,\-:/]+$/g, "");
+      const cl = candidate.toLowerCase();
+      if (
+        candidate &&
+        !cl.startsWith("a/c") &&
+        !cl.startsWith("ac ") &&
+        !cl.startsWith("account") &&
+        !cl.startsWith("xx") &&
+        !cl.startsWith("card")
+      ) {
+        if (candidate.includes("@")) {
+          candidate = candidate.split("@")[0];
+        }
+        candidate = candidate.replace(/\s+/g, " ").trim();
+        if (candidate.length >= 2) {
+          payee = candidate
+            .split(" ")
+            .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+            .join(" ");
+          break;
+        }
+      }
+    }
+  }
+
+  if (!payee) {
+    payee = "UPI / Bank Debit";
+  }
+
+  // Detect category
+  const combined = `${payee} ${text}`.toLowerCase();
+  let category = "Other";
+  for (const [cat, words] of Object.entries(CATEGORY_KEYWORDS)) {
+    if (words.some((w) => combined.includes(w))) {
+      category = cat;
+      break;
+    }
+  }
+
+  return {
+    id: `local_sms_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    title: payee,
+    amount,
+    category,
+    date: getLocalToday(),
+    raw_text: text.slice(0, 400),
+    source: "local",
+  };
+}
+
+export function parseBankSmsBatch(rawInput) {
+  if (!rawInput || !String(rawInput).trim()) return [];
+  // Split multiple SMS messages separated by blank lines or common bank prefixes
+  const chunks = String(rawInput)
+    .split(/\n\s*\n|\r?\n(?=(?:Dear|Rs\.|INR|₹|Your\s+A\/c|Acct|A\/c|Sent\s+Rs|Paid\s+Rs|Debited))/i)
+    .map((c) => c.trim())
+    .filter(Boolean);
+
+  const results = [];
+  for (const chunk of chunks) {
+    const parsed = parseSingleBankSms(chunk);
+    if (parsed) results.push(parsed);
+  }
+  if (results.length === 0) {
+    const single = parseSingleBankSms(rawInput);
+    if (single) results.push(single);
+  }
+  return results;
+}
+
+const LOCAL_SMS_KEY = "mb_local_pending_sms";
+
+export function getLocalPendingSms() {
+  try {
+    const raw = localStorage.getItem(LOCAL_SMS_KEY);
+    if (raw) {
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) return arr;
+    }
+  } catch (e) {
+    console.error(e);
+  }
+  return [];
+}
+
+export function addLocalPendingSms(items) {
+  const existing = getLocalPendingSms();
+  const list = Array.isArray(items) ? items : [items];
+  const updated = [...list, ...existing].slice(0, 50);
+  localStorage.setItem(LOCAL_SMS_KEY, JSON.stringify(updated));
+  window.dispatchEvent(new Event("mb-sms-updated"));
+  return updated;
+}
+
+export function removeLocalPendingSms(id) {
+  const existing = getLocalPendingSms();
+  const updated = existing.filter((item) => item.id !== id);
+  localStorage.setItem(LOCAL_SMS_KEY, JSON.stringify(updated));
+  window.dispatchEvent(new Event("mb-sms-updated"));
+  return updated;
+}
+

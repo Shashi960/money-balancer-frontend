@@ -2,13 +2,14 @@ import { useState, useEffect } from "react";
 import axios from "axios";
 import { useNavigate, useLocation, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
-import { Plus, Edit, Calculator, Sparkles, RotateCcw } from "lucide-react";
+import { Plus, Edit, Calculator, Sparkles, RotateCcw, Clipboard, MessageSquarePlus } from "lucide-react";
 import {
   getLocalToday,
-   getPastDateStr,
+  getPastDateStr,
   evaluateMathExpression,
   formatINR,
   formatDateDisplay,
+  parseSingleBankSms,
 } from "@/lib/financeUtils";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
@@ -42,6 +43,7 @@ export default function AddExpense() {
   const [searchParams] = useSearchParams();
   const editExpense = location.state?.expense;
   const prefilledDate = searchParams.get("date");
+  const sharedText = searchParams.get("shared_text") || searchParams.get("shared_title");
 
   const [formData, setFormData] = useState({
     title: "",
@@ -49,7 +51,27 @@ export default function AddExpense() {
     date: prefilledDate || getLocalToday(),
     category: "Food",
   });
+  const [smsPasteBox, setSmsPasteBox] = useState(false);
+  const [smsRaw, setSmsRaw] = useState("");
   const [submitting, setSubmitting] = useState(false);
+
+  const applySmsToForm = (rawText) => {
+    const parsed = parseSingleBankSms(rawText);
+    if (!parsed) {
+      toast.error("Could not detect a debit amount in that SMS");
+      return false;
+    }
+    setFormData((prev) => ({
+      ...prev,
+      title: parsed.title,
+      amount: String(parsed.amount),
+      category: parsed.category,
+    }));
+    toast.success(`Auto-filled ₹${formatINR(parsed.amount)} (${parsed.title}) from SMS!`);
+    setSmsPasteBox(false);
+    setSmsRaw("");
+    return true;
+  };
 
   useEffect(() => {
     if (editExpense) {
@@ -59,10 +81,12 @@ export default function AddExpense() {
         date: editExpense.date,
         category: editExpense.category,
       });
+    } else if (sharedText) {
+      applySmsToForm(sharedText);
     } else if (prefilledDate) {
       setFormData((prev) => ({ ...prev, date: prefilledDate }));
     }
-  }, [editExpense, prefilledDate]);
+  }, [editExpense, prefilledDate, sharedText]);
 
   const rawAmountStr = String(formData.amount || "").trim();
   const hasMathOperator = /[+\-*/]/.test(rawAmountStr.replace(/^-/, ""));
@@ -153,6 +177,95 @@ export default function AddExpense() {
       </div>
 
       <div className="card" style={{ maxWidth: "640px", margin: "0 auto" }}>
+        {/* 1-Tap Bank SMS Auto-Fill */}
+        {!editExpense && (
+          <div
+            style={{
+              marginBottom: "1.25rem",
+              padding: "0.75rem 1rem",
+              borderRadius: "12px",
+              background: "#f5f3ff",
+              border: "1px solid #ddd6fe",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                flexWrap: "wrap",
+                gap: "0.5rem",
+              }}
+            >
+              <span
+                style={{
+                  fontSize: "0.85rem",
+                  fontWeight: 600,
+                  color: "#4c1d95",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.4rem",
+                }}
+              >
+                <MessageSquarePlus size={16} style={{ color: "#667eea" }} />
+                Have a Bank / UPI Debit SMS?
+              </span>
+              <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  onClick={async () => {
+                    try {
+                      if (navigator.clipboard && navigator.clipboard.readText) {
+                        const txt = await navigator.clipboard.readText();
+                        if (txt && txt.trim()) {
+                          if (!applySmsToForm(txt)) {
+                            setSmsRaw(txt);
+                            setSmsPasteBox(true);
+                          }
+                          return;
+                        }
+                      }
+                      setSmsPasteBox((p) => !p);
+                    } catch {
+                      setSmsPasteBox(true);
+                    }
+                  }}
+                >
+                  <Clipboard size={14} /> Read Copied SMS
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => setSmsPasteBox((p) => !p)}
+                >
+                  Paste Manually
+                </button>
+              </div>
+            </div>
+
+            {smsPasteBox && (
+              <div style={{ marginTop: "0.75rem" }}>
+                <textarea
+                  className="form-input"
+                  rows={2}
+                  placeholder="Paste bank or UPI debit SMS here (e.g. Rs. 250 debited from A/c XX1234 to swiggy@axisbank)..."
+                  value={smsRaw}
+                  onChange={(e) => setSmsRaw(e.target.value)}
+                  style={{ fontSize: "0.85rem", marginBottom: "0.5rem" }}
+                />
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  onClick={() => applySmsToForm(smsRaw)}
+                >
+                  Auto-Fill Form from SMS
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Quick Presets */}
         {!editExpense && (
           <div style={{ marginBottom: "1.5rem" }}>

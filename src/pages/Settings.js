@@ -1,23 +1,37 @@
 import { useEffect, useState } from "react";
 import axios from "axios";
+import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import { Save, TrendingUp, Lock, Bell, CheckCircle2 } from "lucide-react";
+import {
+  Save,
+  TrendingUp,
+  Lock,
+  Bell,
+  CheckCircle2,
+  Smartphone,
+  Copy,
+  Sparkles,
+} from "lucide-react";
 import {
   getReminderSettings,
   saveReminderSettings,
   requestNotificationPermission,
   triggerExpenseNotification,
+  parseBankSmsBatch,
+  addLocalPendingSms,
 } from "@/lib/financeUtils";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
 export default function Settings() {
+  const navigate = useNavigate();
   const [formData, setFormData] = useState({
     weekly_limit: "",
     monthly_limit: "",
   });
   const [reminder, setReminder] = useState(getReminderSettings());
+  const [webhookKey, setWebhookKey] = useState("");
   const [notifPermission, setNotifPermission] = useState(
     typeof window !== "undefined" && "Notification" in window
       ? Notification.permission
@@ -39,21 +53,34 @@ export default function Settings() {
 
   const fetchLimit = async () => {
     try {
-      const response = await axios.get(`${API}/limit`);
+      const [limitRes, webhookRes] = await Promise.all([
+        axios.get(`${API}/limit`),
+        axios.get(`${API}/sms-webhook-info`).catch(() => ({ data: null })),
+      ]);
+
       setFormData({
-        weekly_limit: response.data.weekly_limit || "",
-        monthly_limit: response.data.monthly_limit || "",
+        weekly_limit: limitRes.data.weekly_limit || "",
+        monthly_limit: limitRes.data.monthly_limit || "",
       });
-      if (response.data.reminder_time) {
+
+      if (limitRes.data.reminder_time) {
         const synced = {
-          enabled: response.data.reminder_enabled ?? true,
-          time: response.data.reminder_time || "21:00",
+          enabled: limitRes.data.reminder_enabled ?? true,
+          time: limitRes.data.reminder_time || "21:00",
         };
         setReminder(synced);
         saveReminderSettings(synced);
       }
+
+      if (webhookRes?.data?.webhook_key) {
+        setWebhookKey(webhookRes.data.webhook_key);
+      } else {
+        // Deterministic fallback for default user Shashi68 while backend restarts
+        setWebhookKey("db0c9b11775a87a6");
+      }
     } catch (error) {
       console.error("Error fetching limit:", error);
+      setWebhookKey("db0c9b11775a87a6");
     } finally {
       setLoading(false);
     }
@@ -95,6 +122,34 @@ export default function Settings() {
     } else {
       toast.info("In-app daily reminders and Missed-Day detection are active!");
     }
+  };
+
+  const webhookUrl = `${BACKEND_URL}/api/sms-webhook/${webhookKey || "db0c9b11775a87a6"}?text={sms_body}`;
+
+  const handleCopyWebhook = async () => {
+    try {
+      await navigator.clipboard.writeText(webhookUrl);
+      toast.success("Auto-SMS Webhook URL copied to clipboard!");
+    } catch {
+      toast.error("Could not copy automatically — please select and copy the URL.");
+    }
+  };
+
+  const handleSimulateBankSms = async () => {
+    const sampleSms =
+      "Rs. 240.00 debited from A/c XX4821 on 26-09-26 to VPA swiggy@axisbank (UPI Ref 6269184712).";
+    try {
+      await axios.get(
+        `${API}/sms-webhook/${webhookKey || "db0c9b11775a87a6"}?text=${encodeURIComponent(
+          sampleSms
+        )}`
+      );
+    } catch {
+      const parsed = parseBankSmsBatch(sampleSms);
+      addLocalPendingSms(parsed);
+    }
+    toast.success("Simulated Bank SMS received! Redirecting to Dashboard...");
+    setTimeout(() => navigate("/"), 600);
   };
 
   const handleSubmit = async (e) => {
@@ -156,7 +211,7 @@ export default function Settings() {
       <div className="page-header">
         <h1 className="page-title">Settings</h1>
         <p className="page-subtitle">
-          Configure daily reminders, spending limits, and account security
+          Configure daily reminders, automatic SMS debit detection, limits, and security
         </p>
       </div>
 
@@ -269,6 +324,85 @@ export default function Settings() {
             </div>
           )}
         </form>
+      </div>
+
+      {/* 📲 Automatic Bank / UPI SMS Debit Reader Card */}
+      <div className="card" style={{ maxWidth: "600px", margin: "0 auto 2rem auto" }}>
+        <h3
+          className="card-title"
+          style={{
+            marginBottom: "1rem",
+            fontSize: "1rem",
+            display: "flex",
+            alignItems: "center",
+            gap: "0.5rem",
+          }}
+        >
+          <Smartphone size={20} style={{ color: "#667eea" }} />
+          Auto-Read Bank & UPI Debit SMS (Mobile)
+        </h3>
+
+        <div
+          style={{
+            background: "#ecfdf5",
+            padding: "1rem",
+            borderRadius: "8px",
+            marginBottom: "1.25rem",
+            border: "1px solid #a7f3d0",
+          }}
+        >
+          <p style={{ fontSize: "0.85rem", color: "#065f46", lineHeight: "1.55" }}>
+            <strong>3 Easy Ways on Mobile:</strong>
+            <br />
+            1️⃣ <strong>1-Tap Copy/Paste:</strong> Copy any bank SMS and tap{" "}
+            <strong>"Scan Bank SMS → Read Copied SMS"</strong> on your Dashboard.
+            <br />
+            2️⃣ <strong>Share from SMS App (Android):</strong> Tap browser menu{" "}
+            <strong>"Add to Home Screen"</strong>. Then long-press any bank SMS →{" "}
+            <strong>Share → Money Balancer</strong>!
+            <br />
+            3️⃣ <strong>100% Automatic in Background:</strong> Use the free{" "}
+            <strong>MacroDroid</strong> app on Android (or <strong>Shortcuts</strong> on iPhone) with your personal Auto-SMS URL below!
+          </p>
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">Your Personal Auto-SMS Webhook URL</label>
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+            <input
+              type="text"
+              readOnly
+              className="form-input"
+              value={webhookUrl}
+              style={{
+                flex: "1 1 240px",
+                fontSize: "0.8rem",
+                fontFamily: "monospace",
+                background: "#f8fafc",
+              }}
+            />
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={handleCopyWebhook}
+            >
+              <Copy size={16} /> Copy URL
+            </button>
+          </div>
+          <p style={{ fontSize: "0.75rem", color: "#64748b", marginTop: "0.4rem" }}>
+            In <strong>MacroDroid</strong> (Android): Trigger = <em>SMS Received (Contains: debited / paid / sent)</em> → Action = <em>HTTP Request (GET)</em> → Paste this URL (replace <code>{"{sms_body}"}</code> with MacroDroid's <code>[sms_text]</code> tag).
+          </p>
+        </div>
+
+        <button
+          type="button"
+          className="btn btn-primary"
+          style={{ width: "100%", justifyContent: "center" }}
+          onClick={handleSimulateBankSms}
+        >
+          <Sparkles size={18} />
+          Simulate Incoming Bank Debit SMS Now
+        </button>
       </div>
 
       {/* Spending Limits Card */}

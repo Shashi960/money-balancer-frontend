@@ -8,8 +8,17 @@
       "type": "image/x-icon"
     }
   ],
-  "start_url": ".",
+  "start_url": "/",
   "display": "standalone",
   "theme_color": "#667eea",
-  "background_color": "#f5f7fa"
+  "background_color": "#f5f7fa",
+  "share_target": {
+    "action": "/add-expense",
+    "method": "GET",
+    "params": {
+      "title": "shared_title",
+      "text": "shared_text",
+      "url": "shared_url"
+    }
+  }
 }

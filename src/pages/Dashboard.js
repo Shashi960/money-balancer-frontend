@@ -26,6 +26,10 @@ import {
   Plus,
   Calendar,
   ArrowRight,
+  MessageSquarePlus,
+  Clipboard,
+  Check,
+  X,
 } from "lucide-react";
 import {
   getLocalToday,
@@ -35,10 +39,25 @@ import {
   formatINR,
   getNoSpendDays,
   markNoSpendDay,
+  parseBankSmsBatch,
+  getLocalPendingSms,
+  addLocalPendingSms,
+  removeLocalPendingSms,
 } from "@/lib/financeUtils";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
+
+const EXPENSE_CATEGORIES = [
+  "Food",
+  "Travel",
+  "Shopping",
+  "Bills",
+  "Entertainment",
+  "Healthcare",
+  "Education",
+  "Other",
+];
 
 const COLORS = [
   "#667eea",
@@ -56,30 +75,120 @@ export default function Dashboard() {
   const [summary, setSummary] = useState(null);
   const [expenses, setExpenses] = useState([]);
   const [noSpendDays, setNoSpendDays] = useState(getNoSpendDays());
+  const [pendingSms, setPendingSms] = useState(getLocalPendingSms());
+  const [showSmsScanner, setShowSmsScanner] = useState(false);
+  const [smsInputText, setSmsInputText] = useState("");
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     fetchData();
     const handleNoSpendChange = () => setNoSpendDays(getNoSpendDays());
+    const handleSmsChange = () => setPendingSms((prev) => {
+      const serverItems = prev.filter((i) => i.source !== "local");
+      return [...getLocalPendingSms(), ...serverItems];
+    });
     window.addEventListener("mb-nospend-updated", handleNoSpendChange);
-    return () => window.removeEventListener("mb-nospend-updated", handleNoSpendChange);
+    window.addEventListener("mb-sms-updated", handleSmsChange);
+    return () => {
+      window.removeEventListener("mb-nospend-updated", handleNoSpendChange);
+      window.removeEventListener("mb-sms-updated", handleSmsChange);
+    };
   }, []);
 
   const fetchData = async () => {
     try {
       const from35DaysAgo = getPastDateStr(35);
       const todayStr = getLocalToday();
-      const [summaryRes, expensesRes] = await Promise.all([
+      const [summaryRes, expensesRes, smsRes] = await Promise.all([
         axios.get(`${API}/summary`),
         axios.get(`${API}/expenses?from_date=${from35DaysAgo}&to_date=${todayStr}`),
+        axios.get(`${API}/pending-sms`).catch(() => ({ data: [] })),
       ]);
       setSummary(summaryRes.data);
       setExpenses(Array.isArray(expensesRes.data) ? expensesRes.data : []);
+      const serverSms = Array.isArray(smsRes.data) ? smsRes.data : [];
+      const localSms = getLocalPendingSms();
+      setPendingSms([...localSms, ...serverSms]);
     } catch (error) {
       console.error("Error fetching data:", error);
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleScanSmsText = (textToScan) => {
+    const raw = textToScan !== undefined ? textToScan : smsInputText;
+    if (!raw || !raw.trim()) {
+      toast.error("Please paste or provide a bank/UPI SMS message first");
+      return;
+    }
+    const parsedItems = parseBankSmsBatch(raw);
+    if (parsedItems.length === 0) {
+      toast.error("No debit amount found in the SMS text (e.g., Rs. 250 debited...)");
+      return;
+    }
+    addLocalPendingSms(parsedItems);
+    setSmsInputText("");
+    setShowSmsScanner(false);
+    toast.success(
+      `Detected ${parsedItems.length} debit(s)! Review below to add to expenses.`
+    );
+  };
+
+  const handleReadClipboardSms = async () => {
+    try {
+      if (!navigator.clipboard || !navigator.clipboard.readText) {
+        toast.error("Clipboard access not supported — please paste into the box below.");
+        return;
+      }
+      const clipText = await navigator.clipboard.readText();
+      if (!clipText || !clipText.trim()) {
+        toast.error("Clipboard is empty. Copy a bank SMS first!");
+        return;
+      }
+      setSmsInputText(clipText);
+      handleScanSmsText(clipText);
+    } catch {
+      toast.info("Please long-press and paste your SMS in the text box below.");
+    }
+  };
+
+  const handleApproveSmsItem = async (item) => {
+    try {
+      await axios.post(`${API}/expenses`, {
+        title: item.title || "UPI / Bank Debit",
+        amount: Number(item.amount),
+        date: item.date || getLocalToday(),
+        category: item.category || "Other",
+      });
+      if (item.source === "local" || String(item.id).startsWith("local_sms_")) {
+        removeLocalPendingSms(item.id);
+      } else {
+        await axios.delete(`${API}/pending-sms/${item.id}`).catch(() => {});
+      }
+      setPendingSms((prev) => prev.filter((x) => x.id !== item.id));
+      toast.success(`Added ₹${formatINR(item.amount)} (${item.title}) to expenses!`);
+      fetchData();
+    } catch (err) {
+      console.error("Failed to approve SMS expense:", err);
+      toast.error("Failed to add expense");
+    }
+  };
+
+  const handleIgnoreSmsItem = async (item) => {
+    if (item.source === "local" || String(item.id).startsWith("local_sms_")) {
+      removeLocalPendingSms(item.id);
+    } else {
+      await axios.delete(`${API}/pending-sms/${item.id}`).catch(() => {});
+    }
+    setPendingSms((prev) => prev.filter((x) => x.id !== item.id));
+    toast.info("Ignored SMS entry");
+  };
+
+  const updatePendingSmsField = (id, field, value) => {
+    setPendingSms((prev) =>
+      prev.map((item) => (item.id === id ? { ...item, [field]: value } : item))
+    );
   };
 
   const todayStr = getLocalToday();
@@ -172,7 +281,15 @@ export default function Dashboard() {
           <h1 className="page-title">Dashboard</h1>
           <p className="page-subtitle">Your financial overview at a glance</p>
         </div>
-        <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap" }}>
+          <button
+            className="btn btn-secondary"
+            style={{ borderColor: "#667eea", color: "#4f46e5" }}
+            onClick={() => setShowSmsScanner((prev) => !prev)}
+          >
+            <MessageSquarePlus size={18} />
+            Scan Bank SMS
+          </button>
           <button
             className="btn btn-secondary"
             onClick={() => navigate("/monthly")}
@@ -189,6 +306,250 @@ export default function Dashboard() {
           </button>
         </div>
       </div>
+
+      {/* 📲 Quick Bank / UPI SMS Scanner Drawer */}
+      {showSmsScanner && (
+        <div
+          className="card"
+          style={{
+            marginBottom: "1.5rem",
+            border: "1.5px solid #c7d2fe",
+            background: "linear-gradient(135deg, #eef2ff 0%, #f8fafc 100%)",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              marginBottom: "0.75rem",
+              flexWrap: "wrap",
+              gap: "0.5rem",
+            }}
+          >
+            <div style={{ fontWeight: 700, color: "#312e81", fontSize: "1rem" }}>
+              📲 Scan Bank / UPI Debit SMS
+            </div>
+            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={handleReadClipboardSms}
+              >
+                <Clipboard size={15} /> Read Copied SMS
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => {
+                  const sample =
+                    "Rs. 185.00 debited from A/c XX4821 on 26-09-26 to VPA swiggy@axisbank (UPI Ref 6269184712).";
+                  setSmsInputText(sample);
+                  handleScanSmsText(sample);
+                }}
+              >
+                ✨ Try Sample SMS
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => setShowSmsScanner(false)}
+              >
+                <X size={15} />
+              </button>
+            </div>
+          </div>
+
+          <p style={{ fontSize: "0.825rem", color: "#475569", marginBottom: "0.75rem" }}>
+            Copy one or multiple debit SMS messages from your phone and tap{" "}
+            <strong>Read Copied SMS</strong> (or paste below). Want 100% automatic background detection? Configure Auto-SMS in{" "}
+            <span
+              onClick={() => navigate("/settings")}
+              style={{ color: "#4f46e5", fontWeight: 600, cursor: "pointer", textDecoration: "underline" }}
+            >
+              Settings
+            </span>
+            .
+          </p>
+
+          <textarea
+            className="form-input"
+            rows={3}
+            placeholder="Paste bank/UPI SMS here, e.g.: Sent Rs. 120.00 from HDFC Bank A/C *1234 to rapido@ybl on 26-09-26..."
+            value={smsInputText}
+            onChange={(e) => setSmsInputText(e.target.value)}
+            style={{ marginBottom: "0.75rem", fontSize: "0.875rem" }}
+          />
+
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem" }}>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => handleScanSmsText()}
+            >
+              Detect & Ask to Add
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 💬 Detected Bank / UPI SMS Debits Waiting for User Approval */}
+      {pendingSms.length > 0 && (
+        <div
+          className="card"
+          style={{
+            marginBottom: "1.5rem",
+            border: "2px solid #667eea",
+            background: "linear-gradient(135deg, #f5f3ff 0%, #ffffff 100%)",
+          }}
+          data-testid="pending-sms-banner"
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              marginBottom: "1rem",
+              flexWrap: "wrap",
+              gap: "0.5rem",
+            }}
+          >
+            <div>
+              <h3
+                style={{
+                  fontSize: "1.05rem",
+                  fontWeight: 700,
+                  color: "#312e81",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.5rem",
+                }}
+              >
+                📲 Bank / UPI Debit SMS Detected ({pendingSms.length}) — Add to Expenses?
+              </h3>
+              <p style={{ fontSize: "0.8rem", color: "#64748b" }}>
+                Review the detected amount, edit the title/category if needed, and tap{" "}
+                <strong>Add</strong>.
+              </p>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+            {pendingSms.map((item) => (
+              <div
+                key={item.id}
+                style={{
+                  background: "white",
+                  border: "1px solid #e2e8f0",
+                  borderRadius: "12px",
+                  padding: "0.9rem 1rem",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "0.65rem",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    flexWrap: "wrap",
+                    gap: "0.75rem",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "0.6rem",
+                      flexWrap: "wrap",
+                      flex: "1 1 260px",
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: "1.15rem",
+                        fontWeight: 800,
+                        color: "#4f46e5",
+                        minWidth: "90px",
+                      }}
+                    >
+                      ₹{formatINR(item.amount)}
+                    </span>
+                    <input
+                      type="text"
+                      className="form-input"
+                      value={item.title}
+                      onChange={(e) =>
+                        updatePendingSmsField(item.id, "title", e.target.value)
+                      }
+                      style={{
+                        flex: "1 1 140px",
+                        padding: "0.4rem 0.65rem",
+                        fontSize: "0.875rem",
+                        fontWeight: 600,
+                      }}
+                      placeholder="Expense Title"
+                    />
+                    <select
+                      className="form-select"
+                      value={item.category}
+                      onChange={(e) =>
+                        updatePendingSmsField(item.id, "category", e.target.value)
+                      }
+                      style={{
+                        flex: "0 1 130px",
+                        padding: "0.4rem 0.65rem",
+                        fontSize: "0.85rem",
+                      }}
+                    >
+                      {EXPENSE_CATEGORIES.map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div style={{ display: "flex", gap: "0.5rem" }}>
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm"
+                      onClick={() => handleApproveSmsItem(item)}
+                    >
+                      <Check size={15} /> Add to Expenses
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      style={{ color: "#ef4444" }}
+                      onClick={() => handleIgnoreSmsItem(item)}
+                    >
+                      <X size={15} /> Ignore
+                    </button>
+                  </div>
+                </div>
+
+                {item.raw_text && (
+                  <div
+                    style={{
+                      fontSize: "0.75rem",
+                      color: "#64748b",
+                      background: "#f8fafc",
+                      padding: "0.35rem 0.6rem",
+                      borderRadius: "6px",
+                      fontFamily: "monospace",
+                      wordBreak: "break-word",
+                    }}
+                  >
+                    SMS: "{item.raw_text}"
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* 🔔 Smart Daily Expense Reminder & Missed Days Tracker */}
       {missedDays.length > 0 && (
