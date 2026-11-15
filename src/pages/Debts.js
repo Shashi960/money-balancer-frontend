@@ -50,6 +50,22 @@ const getErrorMessage = (error, fallback = "An unexpected error occurred") => {
   return fallback;
 };
 
+// Client ledger fallback so repayments and history are 100% resilient across deployments
+const getLocalPaymentLedger = (debtId) => {
+  try {
+    const raw = localStorage.getItem(`debt_payments_${debtId}`);
+    return raw ? JSON.parse(raw) : [];
+  } catch (e) {
+    return [];
+  }
+};
+
+const saveLocalPaymentLedger = (debtId, payments) => {
+  try {
+    localStorage.setItem(`debt_payments_${debtId}`, JSON.stringify(payments));
+  } catch (e) {}
+};
+
 export default function Debts() {
   const [debts, setDebts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -91,13 +107,30 @@ export default function Debts() {
   const fetchDebts = async () => {
     try {
       const response = await axios.get(`${API}/debts`);
-      const data = response.data || [];
-      setDebts(data);
+      const rawData = response.data || [];
+      const enrichedData = rawData.map((d) => {
+        const debtId = d.id || d._id;
+        const serverPayments = d.payments || [];
+        const localPayments = getLocalPaymentLedger(debtId);
+        const payments = serverPayments.length > 0 ? serverPayments : localPayments;
+        const totalPaid = payments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+        const origAmt =
+          d.original_amount !== undefined && d.original_amount !== null
+            ? Number(d.original_amount)
+            : Number(d.amount) + totalPaid;
+        return {
+          ...d,
+          id: debtId,
+          payments,
+          original_amount: origAmt,
+        };
+      });
+      setDebts(enrichedData);
 
       // Keep active history debt in sync if currently open
       if (activeDebtForHistory) {
         const activeId = activeDebtForHistory.id || activeDebtForHistory._id;
-        const refreshed = data.find((d) => (d.id || d._id) === activeId);
+        const refreshed = enrichedData.find((d) => (d.id || d._id) === activeId);
         if (refreshed) {
           setActiveDebtForHistory(refreshed);
         }
@@ -243,23 +276,66 @@ export default function Debts() {
     }
 
     setPaymentSubmitting(true);
-    try {
-      const debtId = activeDebtForPayment.id || activeDebtForPayment._id;
-      const response = await axios.post(`${API}/debts/${debtId}/payments`, {
-        amount: activePayAmountNum,
-        date: paymentFormData.date,
-        notes: paymentFormData.notes ? paymentFormData.notes.trim() : "",
-      });
+    const debtId = activeDebtForPayment.id || activeDebtForPayment._id;
+    const curBalance = Number(activeDebtForPayment.amount) || 0;
+    const newBalance = Math.max(0, Math.round((curBalance - activePayAmountNum) * 100) / 100);
+    const newStatus = newBalance <= 0 ? "paid" : "pending";
+    const paymentRecord = {
+      id: `pay_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      amount: activePayAmountNum,
+      date: paymentFormData.date,
+      notes: paymentFormData.notes ? paymentFormData.notes.trim() : "",
+    };
 
-      const updated = response.data;
-      if (updated.status === "paid" || updated.amount <= 0) {
+    try {
+      let updatedDebt = null;
+      try {
+        // Try server payment endpoint
+        const response = await axios.post(`${API}/debts/${debtId}/payments`, {
+          amount: activePayAmountNum,
+          date: paymentFormData.date,
+          notes: paymentFormData.notes ? paymentFormData.notes.trim() : "",
+        });
+        updatedDebt = response.data;
+      } catch (apiError) {
+        // If 404 (server deployment in progress or pending manual redeploy), fallback to PATCH reduction
+        if (apiError.response?.status === 404) {
+          const currentPayments = activeDebtForPayment.payments || getLocalPaymentLedger(debtId);
+          const nextPayments = [...currentPayments, paymentRecord];
+          saveLocalPaymentLedger(debtId, nextPayments);
+
+          const patchPayload = {
+            name: activeDebtForPayment.name,
+            amount: newBalance,
+            reason: activeDebtForPayment.reason,
+            date: activeDebtForPayment.date,
+            debt_type: activeDebtForPayment.debt_type,
+            status: newStatus,
+            original_amount:
+              activeDebtForPayment.original_amount !== undefined && activeDebtForPayment.original_amount !== null
+                ? activeDebtForPayment.original_amount
+                : curBalance,
+          };
+          const patchRes = await axios.patch(`${API}/debts/${debtId}`, patchPayload);
+          updatedDebt = {
+            ...patchRes.data,
+            amount: newBalance,
+            status: newStatus,
+            payments: nextPayments,
+          };
+        } else {
+          throw apiError;
+        }
+      }
+
+      if (newStatus === "paid" || newBalance <= 0) {
         toast.success(
           `Recorded payment of ₹${formatINR(activePayAmountNum)}. Debt fully settled and marked as Paid!`
         );
       } else {
         toast.success(
           `Payment of ₹${formatINR(activePayAmountNum)} deducted. Remaining balance: ₹${formatINR(
-            updated.amount
+            newBalance
           )}`
         );
       }
@@ -290,9 +366,42 @@ export default function Debts() {
     }
 
     try {
-      const res = await axios.delete(`${API}/debts/${debtId}/payments/${paymentId}`);
+      let updatedDebt = null;
+      try {
+        const res = await axios.delete(`${API}/debts/${debtId}/payments/${paymentId}`);
+        updatedDebt = res.data;
+      } catch (apiError) {
+        if (apiError.response?.status === 404) {
+          const targetDebt = debts.find((d) => (d.id || d._id) === debtId) || activeDebtForHistory;
+          const currentPayments = targetDebt?.payments || getLocalPaymentLedger(debtId);
+          const targetPayment = currentPayments.find((p) => p.id === paymentId);
+          const revertAmt = targetPayment ? Number(targetPayment.amount) || 0 : 0;
+          const nextPayments = currentPayments.filter((p) => p.id !== paymentId);
+          saveLocalPaymentLedger(debtId, nextPayments);
+
+          const restoredBalance = Math.round((Number(targetDebt?.amount || 0) + revertAmt) * 100) / 100;
+          const patchPayload = {
+            name: targetDebt.name,
+            amount: restoredBalance,
+            reason: targetDebt.reason,
+            date: targetDebt.date,
+            debt_type: targetDebt.debt_type,
+            status: "pending",
+          };
+          const patchRes = await axios.patch(`${API}/debts/${debtId}`, patchPayload);
+          updatedDebt = {
+            ...patchRes.data,
+            amount: restoredBalance,
+            status: "pending",
+            payments: nextPayments,
+          };
+        } else {
+          throw apiError;
+        }
+      }
+
       toast.success("Repayment reverted successfully. Amount restored to balance.");
-      setActiveDebtForHistory(res.data);
+      if (updatedDebt) setActiveDebtForHistory(updatedDebt);
       fetchDebts();
     } catch (error) {
       console.error("Error deleting repayment:", error);
