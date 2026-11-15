@@ -33,6 +33,23 @@ import {
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
+const getErrorMessage = (error, fallback = "An unexpected error occurred") => {
+  if (!error) return fallback;
+  const detail = error.response?.data?.detail;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail
+      .map((d) => (typeof d === "string" ? d : d.msg || JSON.stringify(d)))
+      .join(", ");
+  }
+  if (detail && typeof detail === "object") {
+    return detail.msg || detail.message || JSON.stringify(detail);
+  }
+  if (error.response?.data?.message) return String(error.response.data.message);
+  if (error.message) return String(error.message);
+  return fallback;
+};
+
 export default function Debts() {
   const [debts, setDebts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -79,14 +96,15 @@ export default function Debts() {
 
       // Keep active history debt in sync if currently open
       if (activeDebtForHistory) {
-        const refreshed = data.find((d) => d.id === activeDebtForHistory.id);
+        const activeId = activeDebtForHistory.id || activeDebtForHistory._id;
+        const refreshed = data.find((d) => (d.id || d._id) === activeId);
         if (refreshed) {
           setActiveDebtForHistory(refreshed);
         }
       }
     } catch (error) {
       console.error("Error fetching debts:", error);
-      toast.error("Failed to fetch debts");
+      toast.error(getErrorMessage(error, "Failed to fetch debts"));
     } finally {
       setLoading(false);
     }
@@ -141,7 +159,11 @@ export default function Debts() {
 
       if (editingDebt) {
         const targetDebtId = editingDebt.id || editingDebt._id;
-        await axios.patch(`${API}/debts/${targetDebtId}`, payload);
+        const editPayload = {
+          ...payload,
+          status: editingDebt.status || "pending",
+        };
+        await axios.patch(`${API}/debts/${targetDebtId}`, editPayload);
         toast.success("Debt entry updated!");
       } else {
         await axios.post(`${API}/debts`, payload);
@@ -153,7 +175,7 @@ export default function Debts() {
       fetchDebts();
     } catch (error) {
       console.error("Error saving debt:", error);
-      toast.error(error.response?.data?.detail || "Failed to save debt entry");
+      toast.error(getErrorMessage(error, "Failed to save debt entry"));
     }
   };
 
@@ -164,7 +186,7 @@ export default function Debts() {
       fetchDebts();
     } catch (error) {
       console.error("Error updating debt:", error);
-      toast.error(error.response?.data?.detail || "Failed to update debt");
+      toast.error(getErrorMessage(error, "Failed to update debt"));
     }
   };
 
@@ -179,7 +201,7 @@ export default function Debts() {
       fetchDebts();
     } catch (error) {
       console.error("Error deleting debt:", error);
-      toast.error(error.response?.data?.detail || "Failed to delete debt");
+      toast.error(getErrorMessage(error, "Failed to delete debt"));
     }
   };
 
@@ -222,7 +244,8 @@ export default function Debts() {
 
     setPaymentSubmitting(true);
     try {
-      const response = await axios.post(`${API}/debts/${activeDebtForPayment.id}/payments`, {
+      const debtId = activeDebtForPayment.id || activeDebtForPayment._id;
+      const response = await axios.post(`${API}/debts/${debtId}/payments`, {
         amount: activePayAmountNum,
         date: paymentFormData.date,
         notes: paymentFormData.notes ? paymentFormData.notes.trim() : "",
@@ -245,7 +268,7 @@ export default function Debts() {
       fetchDebts();
     } catch (error) {
       console.error("Error recording repayment:", error);
-      toast.error(error.response?.data?.detail || "Failed to record payment");
+      toast.error(getErrorMessage(error, "Failed to record payment"));
     } finally {
       setPaymentSubmitting(false);
     }
@@ -273,7 +296,7 @@ export default function Debts() {
       fetchDebts();
     } catch (error) {
       console.error("Error deleting repayment:", error);
-      toast.error(error.response?.data?.detail || "Failed to revert repayment");
+      toast.error(getErrorMessage(error, "Failed to revert repayment"));
     }
   };
 
@@ -338,6 +361,7 @@ export default function Debts() {
           </thead>
           <tbody>
             {list.map((debt) => {
+              const debtId = debt.id || debt._id;
               const payments = debt.payments || [];
               const totalPaid = payments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
               const originalAmount =
@@ -346,7 +370,7 @@ export default function Debts() {
                   : Number(debt.amount) + totalPaid;
 
               return (
-                <tr key={debt.id} data-testid={`debt-${type}-${debt.id}`}>
+                <tr key={debtId} data-testid={`debt-${type}-${debtId}`}>
                   <td style={{ fontWeight: 600 }}>{debt.name}</td>
                   <td>
                     <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
@@ -432,7 +456,7 @@ export default function Debts() {
                               ? "Record money paid back (deduct from balance)"
                               : "Record repayment made (deduct from balance)"
                           }
-                          data-testid={`pay-debt-${debt.id}`}
+                          data-testid={`pay-debt-${debtId}`}
                         >
                           <HandCoins size={14} />
                           <span>- Pay</span>
@@ -444,9 +468,9 @@ export default function Debts() {
                         <button
                           className="btn btn-secondary"
                           style={{ padding: "0.45rem 0.6rem", color: "#10b981" }}
-                          onClick={() => updateStatus(debt.id, "paid")}
+                          onClick={() => updateStatus(debtId, "paid")}
                           title="Mark as Fully Paid"
-                          data-testid={`mark-paid-${debt.id}`}
+                          data-testid={`mark-paid-${debtId}`}
                         >
                           <Check size={15} />
                         </button>
@@ -454,7 +478,7 @@ export default function Debts() {
                         <button
                           className="btn btn-secondary"
                           style={{ padding: "0.45rem 0.6rem", color: "#d97706" }}
-                          onClick={() => updateStatus(debt.id, "pending")}
+                          onClick={() => updateStatus(debtId, "pending")}
                           title="Reopen as Pending"
                         >
                           <RotateCcw size={15} />
@@ -468,7 +492,7 @@ export default function Debts() {
                           style={{ padding: "0.45rem 0.6rem", color: "#4f46e5" }}
                           onClick={() => openHistoryModal(debt)}
                           title="View Payment History Ledger"
-                          data-testid={`history-debt-${debt.id}`}
+                          data-testid={`history-debt-${debtId}`}
                         >
                           <History size={15} />
                         </button>
@@ -488,9 +512,9 @@ export default function Debts() {
                       <button
                         className="btn btn-secondary"
                         style={{ padding: "0.45rem 0.6rem", color: "#ef4444" }}
-                        onClick={() => deleteDebt(debt.id)}
+                        onClick={() => deleteDebt(debtId)}
                         title="Delete Entry"
-                        data-testid={`delete-debt-${debt.id}`}
+                        data-testid={`delete-debt-${debtId}`}
                       >
                         <Trash2 size={15} />
                       </button>
@@ -1105,7 +1129,7 @@ export default function Debts() {
                           <button
                             type="button"
                             onClick={() =>
-                              handleDeletePayment(activeDebtForHistory.id, payment.id)
+                              handleDeletePayment(activeDebtForHistory.id || activeDebtForHistory._id, payment.id)
                             }
                             style={{
                               background: "none",

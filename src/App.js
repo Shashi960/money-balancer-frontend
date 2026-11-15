@@ -16,6 +16,7 @@ import MonthlyReport from "@/pages/MonthlyReport";
 import Debts from "@/pages/Debts";
 import Settings from "@/pages/Settings";
 import Login from "@/pages/Login";
+import ErrorBoundary from "@/components/ErrorBoundary";
 import { Toaster } from "@/components/ui/sonner";
 import { toast } from "sonner";
 import {
@@ -225,14 +226,16 @@ function App() {
       <BrowserRouter>
         <Navigation onLogout={handleLogout} />
         <main className="main-content">
-          <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/add-expense" element={<AddExpense />} />
-            <Route path="/monthly" element={<MonthlyReport />} />
-            <Route path="/expenses" element={<Expenses />} />
-            <Route path="/debts" element={<Debts />} />
-            <Route path="/settings" element={<Settings />} />
-          </Routes>
+          <ErrorBoundary>
+            <Routes>
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/add-expense" element={<AddExpense />} />
+              <Route path="/monthly" element={<MonthlyReport />} />
+              <Route path="/expenses" element={<Expenses />} />
+              <Route path="/debts" element={<Debts />} />
+              <Route path="/settings" element={<Settings />} />
+            </Routes>
+          </ErrorBoundary>
         </main>
       </BrowserRouter>
       <Toaster />
